@@ -4,9 +4,8 @@ from datetime import datetime, timedelta
 from flask import Flask
 import requests
 import telebot
-from telebot import types
 
-# Инициализация Flask для открытия порта на Render
+# Инициализация Flask для удержания открытого порта на Render
 app = Flask(__name__)
 
 
@@ -16,10 +15,8 @@ def home():
 
 
 # Твои ключи и настройки
-TELEGRAM_TOKEN = (
-    "9246241192:AAHwAr8DWkcBfEQZK4nS2sBYCuA2Zo0r4hk"  # noqa: E501
-)
-YUTE_API_KEY = "AIzaSyBNPFQ1vdqH9WXQ9Cwb3SKpJAAuirBa288"  # noqa: E501
+TELEGRAM_TOKEN = "9246241192:AAHwAr8DWkcBfEQZK4nS2sBYCuA2Zo0r4hk"
+YUTE_API_KEY = "AIzaSyBNPFQ1vdqH9WXQ9Cwb3SKpJAAuirBa288"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 user_sessions = {}
@@ -98,7 +95,7 @@ def fetch_videos_batch(query, user_id):
 
 
 # Обработчик команды /start
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=["start"])
 def send_welcome(message):
   bot.reply_to(
       message,
@@ -106,7 +103,7 @@ def send_welcome(message):
   )
 
 
-# Обработчик любого текстового запроса (поиск видео)
+# Обработчик текстовых запросов (поиск видео)
 @bot.message_handler(func=lambda message: True)
 def handle_query(message):
   query = message.text
@@ -128,4 +125,23 @@ def handle_query(message):
         f"📺 **{title}**\n👀 Просмотров: {view_count}\n🔗 {video_url}",
         parse_mode="Markdown",
     )
-    
+
+
+# Функция запуска бота в отдельном потоке
+def run_bot():
+  try:
+    bot.infinity_polling(none_stop=True, interval=0, timeout=20)
+  except Exception as e:
+    print(f"Bot polling error: {e}")
+
+
+if __name__ == "__main__":
+  # Запускаем бота в фоновом режиме
+  bot_thread = threading.Thread(target=run_bot)
+  bot_thread.daemon = True
+  bot_thread.start()
+
+  # Запускаем Flask для Render
+  port = int(os.environ.get("PORT", 5000))
+  app.run(host="0.0.0.0", port=port)
+  
