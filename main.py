@@ -4,7 +4,7 @@ from flask import Flask
 import requests
 import telebot
 
-# Инициализация Flask для удержания открытого порта на Render
+# Инициализация Flask
 app = Flask(__name__)
 
 
@@ -40,17 +40,31 @@ def fetch_videos_batch(query, user_id):
       "key": YUTE_API_KEY,
   }
 
-  response = requests.get(search_url, params=search_params)
-  search_data = response.json()
-
-  # Выводим ответ от YouTube в логи Render для диагностики
-  print("YouTube API Response:", search_data)
+  try:
+    response = requests.get(search_url, params=search_params)
+    search_data = response.json()
+  except Exception as e:
+    print(f"Search request error: {e}")
+    return []
 
   if "items" not in search_data or not search_data["items"]:
+    first_word = query.split()[0] if query.strip() else query
+    if first_word != query:
+      search_params["q"] = first_word
+      try:
+        response = requests.get(search_url, params=search_params)
+        search_data = response.json()
+      except Exception as e:
+        print(f"Fallback search error: {e}")
+        return []
+
+  if "items" not in search_data:
     return []
 
   all_items = search_data["items"]
-  new_items = [item for item in all_items if item["id"]["videoId"] not in seen_ids]
+  new_items = [
+      item for item in all_items if item["id"]["videoId"] not in seen_ids
+  ]
 
   if not new_items:
     seen_ids.clear()
@@ -65,9 +79,12 @@ def fetch_videos_batch(query, user_id):
       "key": YUTE_API_KEY,
   }
 
-  stats_response = requests.get(stats_url, params=stats_params)
-  stats_data = stats_response.json()
-  print("YouTube Stats Response:", stats_data)
+  try:
+    stats_response = requests.get(stats_url, params=stats_params)
+    stats_data = stats_response.json()
+  except Exception as e:
+    print(f"Stats request error: {e}")
+    return []
 
   found_videos = []
   seen_channels = set()
@@ -95,4 +112,53 @@ def fetch_videos_batch(query, user_id):
       found_videos.append((video_id, title, view_count))
 
   return found_videos
+
+
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+  bot.reply_to(
+      message,
+      "Привет! Напиши мне ключевое слово, и я найду свежие видео с YouTube.",
+  )
+
+
+@bot.message_handler(func=lambda message: True)
+def handle_query(message):
+  query = message.text
+  bot.reply_to(message, f"Ищу свежие непопулярные видео по запросу: {query}...")
+
+  videos = fetch_videos_batch(query, message.from_user.id)
+
+  if not videos:
+    bot.send_message(
+        message.chat.id,
+        "К сожалению, по этому запросу ничего не удалось найти. Попробуй другое ключевое слово.",
+    )
+    return
+
+  response_lines = ["Вот свежие непопулярные видео:\n"]
+  for video_id, title, view_count in videos:
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    response_lines.append(f"{video_url} (Просмотров: {view_count})")
+
+  bot.send_message(message.chat.id, "\n".join(response_lines))
+
+
+def run_bot():
+  while True:
+    try:
+      print("Starting bot polling...")
+      bot.infinity_polling(none_stop=True, interval=1, timeout=20)
+    except Exception as e:
+      print(f"Bot polling error: {e}")
+
+
+if __name__ == "__main__":
+  # Запускаем телеграм-бот в фоновом потоке
+  bot_thread = threading.Thread(target=run_bot, daemon=True)
+  bot_thread.start()
+
+  # Запускаем Flask-сервер на порту, который требует Render
+  port = int(os.environ.get("PORT", 10000))
+  app.run(host="0.0.0.0", port=port)
   
