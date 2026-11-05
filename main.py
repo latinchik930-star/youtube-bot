@@ -97,22 +97,35 @@ def fetch_videos_batch(query, user_id):
   return found_videos
 
 
-# Здесь можно добавить обработчики твоего бота (handlers), если они были ниже
+# Обработчик команды /start
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+  bot.reply_to(
+      message,
+      "Привет! Напиши мне ключевое слово, и я найду свежие видео с YouTube.",
+  )
 
 
-# Функция для запуска самого телеграм-бота
-def run_bot():
-  bot.infinity_polling(none_stop=True)
+# Обработчик любого текстового запроса (поиск видео)
+@bot.message_handler(func=lambda message: True)
+def handle_query(message):
+  query = message.text
+  bot.reply_to(message, f"Ищу свежие видео по запросу: «{query}»...")
 
+  videos = fetch_videos_batch(query, message.from_user.id)
 
-if __name__ == "__main__":
-  # Запускаем телеграм-бота в отдельном фоновом потоке
-  bot_thread = threading.Thread(target=run_bot)
-  bot_thread.daemon = True
-  bot_thread.start()
+  if not videos:
+    bot.send_message(
+        message.chat.id,
+        "Пока нет новых подходящих видео с просмотрами < 500.",
+    )
+    return
 
-  # Получаем порт от Render (по умолчанию 5000 для локального теста)
-  port = int(os.environ.get("PORT", 5000))
-  # Запускаем Flask-сервер, чтобы Render видел открытый порт
-  app.run(host="0.0.0.0", port=port)
-  
+  for video_id, title, view_count in videos:
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    bot.send_message(
+        message.chat.id,
+        f"📺 **{title}**\n👀 Просмотров: {view_count}\n🔗 {video_url}",
+        parse_mode="Markdown",
+    )
+    
