@@ -15,7 +15,7 @@ def home():
 
 # Твои ключи и настройки
 TELEGRAM_TOKEN = "9246241192:AAHwAr8DWkcBfEQZK4nS2sBYCuA2Zo0r4hk"
-YUTE_API_KEY = "AIzaSyBNPFQ1vdqH9WXQ9Cwb3SKpJAAuirBa288"
+YUTE_API_KEY = "AIzaSyBNPFQlvdqH9WXQ9Cwb3SKpJAaUirBa288"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 user_sessions = {}
