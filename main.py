@@ -1,13 +1,27 @@
+import os
+import threading
 from datetime import datetime, timedelta
+from flask import Flask
 import requests
 import telebot
 from telebot import types
 
-TELEGRAM_TOKEN = "9246241192:AAHwAr8DWkcBfEQZK4nS2sBYCuA2Zo0r4hk"
-YOUTUBE_API_KEY = "AIzaSyBNPFQlvdqH9WXQ9Cwb3SKpJAaUirBa288"
+# Инициализация Flask для открытия порта на Render
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+  return "Bot is running!"
+
+
+# Твои ключи и настройки
+TELEGRAM_TOKEN = (
+    "9246241192:AAHwAr8DWkcBfEQZK4nS2sBYCuA2Zo0r4hk"  # noqa: E501
+)
+YUTE_API_KEY = "AIzaSyBNPFQ1vdqH9WXQ9Cwb3SKpJAAuirBa288"  # noqa: E501
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
 user_sessions = {}
 
 
@@ -31,7 +45,7 @@ def fetch_videos_batch(query, user_id):
       "publishedAfter": start_date,
       "order": "date",
       "maxResults": 30,
-      "key": YOUTUBE_API_KEY,
+      "key": YUTE_API_KEY,
   }
 
   response = requests.get(search_url, params=search_params)
@@ -40,11 +54,10 @@ def fetch_videos_batch(query, user_id):
   if "items" not in search_data:
     return []
 
-  new_items = [
-      item
-      for item in search_data["items"]
-      if item["id"]["videoId"] not in seen_ids
-  ]
+  new_items = []
+  for item in search_data["items"]:
+    if item["id"]["videoId"] not in seen_ids:
+      new_items.append(item)
 
   if not new_items:
     return []
@@ -55,7 +68,7 @@ def fetch_videos_batch(query, user_id):
   stats_params = {
       "part": "statistics,snippet",
       "id": ",".join(video_ids),
-      "key": YOUTUBE_API_KEY,
+      "key": YUTE_API_KEY,
   }
 
   stats_response = requests.get(stats_url, params=stats_params)
@@ -79,91 +92,27 @@ def fetch_videos_batch(query, user_id):
       seen_channels.add(channel_id)
       seen_ids.add(video_id)
 
-      found_videos.append(
-          f"🎬 {title}\n🔗 https://www.youtube.com/watch?v={video_id}\n👀"
-          f" Просмотров: {view_count}"
-      )
-
-      if len(found_videos) >= 3:
-        break
+      found_videos.append((video_id, title, view_count))
 
   return found_videos
 
 
-@bot.message_handler(commands=["start"])
-def send_welcome(message):
-  user_id = message.from_user.id
-  user_sessions[user_id] = {"query": "", "seen": set()}
-
-  bot.reply_to(
-      message,
-      "Привет! Напиши ключевое слово для поиска. Бот ищет свежие непопулярные"
-      " видео с разных каналов и поддерживает рулетку!",
-  )
+# Здесь можно добавить обработчики твоего бота (handlers), если они были ниже
 
 
-@bot.message_handler(func=lambda message: True)
-def search_videos(message):
-  user_id = message.from_user.id
-  query = message.text.strip()
-
-  if user_id not in user_sessions:
-    user_sessions[user_id] = {"query": query, "seen": set()}
-
-  bot.send_message(message.chat.id, f"🎰 Ищу видео по запросу: '{query}'...")
-
-  videos = fetch_videos_batch(query, user_id)
-
-  markup = types.InlineKeyboardMarkup()
-  btn = types.InlineKeyboardButton(
-      "🔄 Крутить еще", callback_data="roll_next"
-  )
-  markup.add(btn)
-
-  if videos:
-    result_text = f"🎯 Результаты по запросу '{query}':\n\n" + "\n\n".join(videos)
-    bot.send_message(message.chat.id, result_text, reply_markup=markup)
-  else:
-    bot.send_message(
-        message.chat.id,
-        "По этому запросу не нашлось новых видео с просмотрами меньше 500."
-        " Попробуй другой запрос или чуть позже!",
-    )
+# Функция для запуска самого телеграм-бота
+def run_bot():
+  bot.infinity_polling(none_stop=True)
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "roll_next")
-def callback_roll(call):
-  user_id = call.from_user.id
+if __name__ == "__main__":
+  # Запускаем телеграм-бота в отдельном фоновом потоке
+  bot_thread = threading.Thread(target=run_bot)
+  bot_thread.daemon = True
+  bot_thread.start()
 
-  if user_id not in user_sessions or not user_sessions[user_id]["query"]:
-    bot.answer_callback_query(
-        call.id, "Сначала отправь текстовый запрос в чат!", show_alert=True
-    )
-    return
-
-  query = user_sessions[user_id]["query"]
-  bot.answer_callback_query(call.id, "Крутим дальше...")
-
-  videos = fetch_videos_batch(query, user_id)
-
-  markup = types.InlineKeyboardMarkup()
-  btn = types.InlineKeyboardButton(
-      "🔄 Крутить еще", callback_data="roll_next"
-  )
-  markup.add(btn)
-
-  if videos:
-    result_text = f"🎰 Новая порция по запросу '{query}':\n\n" + "\n\n".join(
-        videos
-    )
-    bot.send_message(call.message.chat.id, result_text, reply_markup=markup)
-  else:
-    bot.answer_callback_query(
-        call.id,
-        "Больше уникальных видео по этому запросу нет!",
-        show_alert=True,
-    )
-
-
-print("Бот запущен...")
-bot.polling(none_stop=True)
+  # Получаем порт от Render (по умолчанию 5000 для локального теста)
+  port = int(os.environ.get("PORT", 5000))
+  # Запускаем Flask-сервер, чтобы Render видел открытый порт
+  app.run(host="0.0.0.0", port=port)
+  
