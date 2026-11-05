@@ -49,15 +49,19 @@ def fetch_videos_batch(query, user_id):
   search_data = response.json()
 
   if "items" not in search_data:
-    return []
+    return [], False
 
-  new_items = []
-  for item in search_data["items"]:
-    if item["id"]["videoId"] not in seen_ids:
-      new_items.append(item)
+  all_items = search_data["items"]
+  
+  # Оставляем только то, что пользователь еще не видел в этой сессии
+  new_items = [item for item in all_items if item["id"]["videoId"] not in seen_ids]
 
+  # Если новые ролики закончились — сбрасываем память (бесконечный цикл рулетки)
+  is_reset = False
   if not new_items:
-    return []
+    seen_ids.clear()
+    new_items = all_items
+    is_reset = True
 
   video_ids = [item["id"]["videoId"] for item in new_items]
 
@@ -73,25 +77,32 @@ def fetch_videos_batch(query, user_id):
 
   found_videos = []
   seen_channels = set()
+  all_parsed_videos = []
 
   for item in stats_data.get("items", []):
     view_count = int(item["statistics"].get("viewCount", 0))
+    channel_id = item["snippet"]["channelId"]
+    video_id = item["id"]
+    title = item["snippet"]["title"]
 
+    all_parsed_videos.append((video_id, title, view_count, channel_id))
+
+    # Основной фильтр
     if view_count < 500:
-      channel_id = item["snippet"]["channelId"]
-
       if channel_id in seen_channels:
         continue
-
-      video_id = item["id"]
-      title = item["snippet"]["title"]
-
       seen_channels.add(channel_id)
       seen_ids.add(video_id)
-
       found_videos.append((video_id, title, view_count))
 
-  return found_videos
+  # Умный фоллбек: если под < 500 ничего не нашлось, берем топ-3 самых малопросматриваемых из выдачи
+  if not found_videos and all_parsed_videos:
+    all_parsed_videos.sort(key=lambda x: x[2]) # Сортируем по просмотрам (по возрастанию)
+    for video_id, title, view_count, channel_id in all_parsed_videos[:3]:
+      seen_ids.add(video_id)
+      found_videos.append((video_id, title, view_count))
+
+  return found_videos, is_reset
 
 
 # Обработчик команды /start
@@ -109,20 +120,31 @@ def handle_query(message):
   query = message.text
   bot.reply_to(message, f"Ищу свежие видео по запросу: «{query}»...")
 
-  videos = fetch_videos_batch(query, message.from_user.id)
+  videos, is_reset = fetch_videos_batch(query, message.from_user.id)
 
   if not videos:
     bot.send_message(
         message.chat.id,
-        "Пока нет новых подходящих видео с просмотрами < 500.",
+        "К сожалению, по этому запросу совсем ничего не удалось найти.",
     )
     return
 
+  if is_reset:
+    bot.send_message(
+        message.chat.id, 
+        "🔄 Свежие уникальные варианты в выдаче закончились. Начинаем новый круг по тем же роликам!"
+    )
+
   for video_id, title, view_count in videos:
     video_url = f"https://www.youtube.com/watch?v={video_id}"
+    # Подсказка, если ролик выведен как запасной вариант (когда меньше 500 нет вообще)
+    status_text = f"👀 Просмотров: {view_count}"
+    if view_count >= 500:
+      status_text += " (меньше 500 нет, это самый малопросмотровый из свежих)"
+
     bot.send_message(
         message.chat.id,
-        f"📺 **{title}**\n👀 Просмотров: {view_count}\n🔗 {video_url}",
+        f"📺 **{title}**\n{status_text}\n🔗 {video_url}",
         parse_mode="Markdown",
     )
 
@@ -136,12 +158,10 @@ def run_bot():
 
 
 if __name__ == "__main__":
-  # Запускаем бота в фоновом режиме
   bot_thread = threading.Thread(target=run_bot)
   bot_thread.daemon = True
   bot_thread.start()
 
-  # Запускаем Flask для Render
   port = int(os.environ.get("PORT", 5000))
   app.run(host="0.0.0.0", port=port)
   
