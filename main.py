@@ -49,19 +49,17 @@ def fetch_videos_batch(query, user_id):
   search_data = response.json()
 
   if "items" not in search_data:
-    return [], False
+    return []
 
   all_items = search_data["items"]
   
-  # Оставляем только то, что пользователь еще не видел в этой сессии
+  # Фильтруем те, что уже показывали
   new_items = [item for item in all_items if item["id"]["videoId"] not in seen_ids]
 
-  # Если новые ролики закончились — сбрасываем память (бесконечный цикл рулетки)
-  is_reset = False
+  # Если всё из текущей выдачи уже видели — сбрасываем память (бесконечная рулетка)
   if not new_items:
     seen_ids.clear()
     new_items = all_items
-    is_reset = True
 
   video_ids = [item["id"]["videoId"] for item in new_items]
 
@@ -87,7 +85,7 @@ def fetch_videos_batch(query, user_id):
 
     all_parsed_videos.append((video_id, title, view_count, channel_id))
 
-    # Основной фильтр
+    # Пытаемся найти строго меньше 500 с уникальных каналов
     if view_count < 500:
       if channel_id in seen_channels:
         continue
@@ -95,14 +93,15 @@ def fetch_videos_batch(query, user_id):
       seen_ids.add(video_id)
       found_videos.append((video_id, title, view_count))
 
-  # Умный фоллбек: если под < 500 ничего не нашлось, берем топ-3 самых малопросматриваемых из выдачи
+  # Запасной вариант: если под жесткий фильтр < 500 ничего не попало вообще, 
+  # берем топ-4 самых малопросматриваемых из того, что нашлось, как на твоих скриншотах
   if not found_videos and all_parsed_videos:
-    all_parsed_videos.sort(key=lambda x: x[2]) # Сортируем по просмотрам (по возрастанию)
-    for video_id, title, view_count, channel_id in all_parsed_videos[:3]:
+    all_parsed_videos.sort(key=lambda x: x[2])  # Сортируем по просмотрам
+    for video_id, title, view_count, channel_id in all_parsed_videos[:4]:
       seen_ids.add(video_id)
       found_videos.append((video_id, title, view_count))
 
-  return found_videos, is_reset
+  return found_videos
 
 
 # Обработчик команды /start
@@ -114,39 +113,28 @@ def send_welcome(message):
   )
 
 
-# Обработчик текстовых запросов (поиск видео)
+# Обработчик текстовых запросов (поиск видео в точности как на скринах)
 @bot.message_handler(func=lambda message: True)
 def handle_query(message):
   query = message.text
-  bot.reply_to(message, f"Ищу свежие видео по запросу: «{query}»...")
+  bot.reply_to(message, f"Ищу свежие непопулярные видео по запросу: {query}...")
 
-  videos, is_reset = fetch_videos_batch(query, message.from_user.id)
+  videos = fetch_videos_batch(query, message.from_user.id)
 
   if not videos:
     bot.send_message(
         message.chat.id,
-        "К сожалению, по этому запросу совсем ничего не удалось найти.",
+        "К сожалению, по этому запросу ничего не удалось найти.",
     )
     return
 
-  if is_reset:
-    bot.send_message(
-        message.chat.id, 
-        "🔄 Свежие уникальные варианты в выдаче закончились. Начинаем новый круг по тем же роликам!"
-    )
-
+  # Формируем красивый ответ списком, как на твоих скриншотах
+  response_lines = ["Вот свежие непопулярные видео:\n"]
   for video_id, title, view_count in videos:
     video_url = f"https://www.youtube.com/watch?v={video_id}"
-    # Подсказка, если ролик выведен как запасной вариант (когда меньше 500 нет вообще)
-    status_text = f"👀 Просмотров: {view_count}"
-    if view_count >= 500:
-      status_text += " (меньше 500 нет, это самый малопросмотровый из свежих)"
+    response_lines.append(f"{video_url} (Просмотров: {view_count})")
 
-    bot.send_message(
-        message.chat.id,
-        f"📺 **{title}**\n{status_text}\n🔗 {video_url}",
-        parse_mode="Markdown",
-    )
+  bot.send_message(message.chat.id, "\n".join(response_lines))
 
 
 # Функция запуска бота в отдельном потоке
